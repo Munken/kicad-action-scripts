@@ -23,6 +23,7 @@
 from __future__ import print_function
 from pcbnew import *
 import sys
+import getopt
 import tempfile
 import shutil
 import os
@@ -87,7 +88,7 @@ class FillArea:
     REASON_PAD          = 5
     REASON_DRAWING      = 6
     REASON_STEP         = 7
-    
+
     def __init__(self, filename=None):
         self.filename = None
         self.clearance = 0
@@ -171,7 +172,20 @@ class FillArea:
     def SetClearanceMM(self, s):
         self.clearance = float(FromMM(s))
         return self
-    
+
+    def ViaIsInsideAllowedArea(self, x, y):
+      """
+      Check if the via is inside the allowed area.
+      """
+      board = self.pcb.ComputeBoundingBox(True)
+      clearance = self.clearance + self.size
+      if (x >= board.GetRight() - clearance) or (x <= board.GetLeft() + clearance):
+        return False
+      elif (y >= board.GetBottom() - clearance) or (y <= board.GetTop() + clearance):
+        return False
+      else:
+        return True
+
     def GetReasonSymbol(self, reason):
         if isinstance(reason, ViaObject):
             return "X"
@@ -189,9 +203,9 @@ class FillArea:
             return "D"
         if reason == self.REASON_STEP:
             return "-"
-        
+
         return str(reason)
-    
+
     def PrintRect(self, rectangle):
         """debuging tool
         Print board in ascii art
@@ -229,8 +243,9 @@ STEP         = '-'
             area = self.pcb.GetArea(i)
             area.ClearFilledPolysList()
             area.UnFill()
-            if not area.GetIsKeepout():
-                area.BuildFilledSolidAreasPolygons(self.pcb)
+            # Could not repair this.
+            #if not area.GetIsKeepout():
+              #area.BuildFilledSolidAreasPolygons(self.pcb)
 
     def CheckViaInAllAreas(self, via, all_areas):
         '''
@@ -249,17 +264,17 @@ STEP         = '-'
                 for dx in [-offset, offset]:
                     for dy in [-offset, offset]:                                            # All 4 corners of the via are testet (upper, lower, left, right) but not the center
                         point_to_test   = wxPoint(via.PosX + dx, via.PosY + dy)
-                        
+
                         hit_test_area   = area.HitTestFilledArea(point_to_test)             # Collides with a filled area
                         hit_test_edge   = area.HitTestForEdge(point_to_test)                # Collides with an edge/corner
                         hit_test_zone   = area.HitTestInsideZone(point_to_test)             # Is inside a zone (e.g. KeepOut)
-                        
+
                         if is_keepout_area and (hit_test_area or hit_test_edge or hit_test_zone):
                             return self.REASON_KEEPOUT                                      # Collides with keepout
 
                         elif (hit_test_area or hit_test_edge):
                             return self.REASON_OTHER_SIGNAL                                 # Collides with another signal (e.g. on another layer)
-                        
+
                         elif hit_test_zone:
                             # Check if the zone is higher priority than other zones of the target net in the same point
                             target_areas_on_same_layer = filter(lambda x: ((x.GetPriority() > area_priority) and (x.GetLayer() == area_layer) and (x.GetNetname().upper() == self.netname)), all_areas)
@@ -268,9 +283,9 @@ STEP         = '-'
                                     break                                                   # Area of target net has higher priority on this layer
                             else:
                                 return self.REASON_OTHER_SIGNAL                             # Collides with another signal (e.g. on another layer)
-        
+
         return self.REASON_OK
-        
+
     def ClearViaInStepSize(self, rectangle, x, y, distance):
         '''
         Stepsize==0
@@ -293,11 +308,11 @@ STEP         = '-'
 
         Star
             O   O   O   O   O
-              O   O   O   O  
+              O   O   O   O
             O   O   O   O   O
-              O   O   O   O  
+              O   O   O   O
             O   O   O   O   O
-              O   O   O   O  
+              O   O   O   O
             O   O   O   O   O
         '''
         for x_pos in range(x-distance, x+distance+1):
@@ -321,6 +336,8 @@ STEP         = '-'
                     if via.GetTimeStamp() == 33:
                         self.pcb.RemoveNative(via)
             self.RefillBoardAreas()
+            if self.filename:
+                self.pcb.Save(self.filename)
             return                                          # no need to run the rest of logic
 
         lboard = self.pcb.ComputeBoundingBox(True)
@@ -331,7 +348,7 @@ STEP         = '-'
         l_clearance = self.clearance + self.size
         x_limit     = int((lboard.GetWidth() + l_clearance) / l_clearance) + 1
         y_limit     = int((lboard.GetHeight() + l_clearance) / l_clearance) + 1
-        
+
         rectangle = [[self.REASON_NO_SIGNAL]*y_limit for i in xrange(x_limit)]
 
         all_pads        = self.pcb.GetPads()
@@ -342,60 +359,62 @@ STEP         = '-'
 
         via_list = []       # Create a list of existing vias => faster than scanning through the whole rectangle
         max_target_area_clearance = 0
-        
+
         # Enum all target areas (Search possible positions for vias on the target net)
         for area in target_areas:
             print ("Processing Target Area: %s, LayerName: %s..." % (area.GetNetname(), area.GetLayerName()))
-            
+
             is_selected_area    = area.IsSelected()
             area_clearance      = area.GetClearance()
             if max_target_area_clearance < area_clearance:
                 max_target_area_clearance = area_clearance
-            
+
             if (not self.only_selected_area) or (self.only_selected_area and is_selected_area):         # All areas or only the selected area
                 for x in xrange(len(rectangle)):                                                        # Check every possible point in the virtual coordinate system
                     for y in xrange(len(rectangle[0])):
                         if rectangle[x][y] == self.REASON_NO_SIGNAL:                                    # No other "target area" found yet => go on with processing
                             current_x = origin.x + (x * l_clearance)                                    # Center of the via
                             current_y = origin.y + (y * l_clearance)
-                            
+
+                            # Sounds good doesn't work properly.
                             test_result = True                                                          # Start with true, if a check fails, it is set to false
-                            
                             offset = max(self.clearance, area_clearance) + self.size / 2                # Offset is half the size of the via plus the clearance of the via or the area
                             for dx in [-offset, offset]:
                                 for dy in [-offset, offset]:                                            # All 4 corners of the via are testet (upper, lower, left, right) but not the center
                                     point_to_test   = wxPoint(current_x + dx, current_y + dy)
+                                    # hit_test_area is only true if copper pour zones are filled
                                     hit_test_area   = area.HitTestFilledArea(point_to_test)             # Collides with a filled area
                                     hit_test_edge   = area.HitTestForEdge(point_to_test)                # Collides with an edge/corner
-                                    
-                                    test_result &= (hit_test_area and not hit_test_edge)                # test_result only remains true if the via is inside an area and not on an edge
 
-                            if test_result:
+                                    #test_result &= hit_test_area and not hit_test_edge                  # test_result only remains true if the via is inside an area and not on an edge
+                                    test_result = hit_test_edge
+
+                            if self.ViaIsInsideAllowedArea(current_x, current_y) and test_result:
                                 via_obj = ViaObject(x=x, y=y, pos_x=current_x, pos_y=current_y)         # Create a via object with information about the via and place it in the rectangle
                                 rectangle[x][y] = via_obj
                                 via_list.append(via_obj)
-        
+
         if self.debug:
             print("\nPost target areas:")
             self.PrintRect(rectangle)
-        
+
         # Enum all vias
         print ("Processing all vias of target area...")
         for via in via_list:
             reason = self.CheckViaInAllAreas(via, all_areas)
             if reason != self.REASON_OK:
                 rectangle[via.X][via.Y] = reason
-        
+
         if self.debug:
             print("\nPost areas:")
             self.PrintRect(rectangle)
-        
+
         # Same job with all pads => all pads on all layers
         print ("Processing all pads...")
         for pad in all_pads:
             local_offset = max(pad.GetClearance(), self.clearance, max_target_area_clearance) + (self.size / 2)
             max_size     = max(pad.GetSize().x, pad.GetSize().y)
-            
+
             start_x      = int(floor(((pad.GetPosition().x - (max_size / 2.0 + local_offset)) - origin.x) / l_clearance))
             stop_x       = int(ceil(((pad.GetPosition().x + (max_size / 2.0 + local_offset)) - origin.x) / l_clearance))
 
@@ -410,11 +429,11 @@ STEP         = '-'
                         size_rect = wxSize(2 * local_offset, 2 * local_offset)
                         if pad.HitTest(EDA_RECT(start_rect, size_rect), False):
                             rectangle[x][y] = self.REASON_PAD
-        
+
         if self.debug:
             print("\nPost pads:")
             self.PrintRect(rectangle)
-        
+
         # Same job with tracks => all tracks on all layers
         print ("Processing all tracks...")
         for track in all_tracks:
@@ -440,7 +459,7 @@ STEP         = '-'
             opy = stop_y
 
             clearance   = max(track.GetClearance(), self.clearance, max_target_area_clearance) + (self.size / 2) + (track.GetWidth() / 2)
-            
+
             start_x     = int(floor(((start_x - clearance) - origin.x) / l_clearance))
             stop_x      = int(ceil(((stop_x + clearance) - origin.x) / l_clearance))
 
@@ -455,17 +474,17 @@ STEP         = '-'
                         size_rect = wxSize(2 * clearance, 2 * clearance)
                         if track.HitTest(EDA_RECT(start_rect, size_rect), False):
                             rectangle[x][y] = self.REASON_TRACK
-        
+
         if self.debug:
             print("\nPost tracks:")
             self.PrintRect(rectangle)
-        
+
         # Same job with existing text
         print ("Processing all existing drawings...")
         for draw in all_drawings:
             inter   = float(self.clearance + self.size)
             bbox    = draw.GetBoundingBox()
-            
+
             start_x = int(floor(((bbox.GetPosition().x - inter) - origin.x) / l_clearance))
             stop_x  = int(ceil(((bbox.GetPosition().x + (bbox.GetSize().x + inter)) - origin.x) / l_clearance))
 
@@ -475,32 +494,32 @@ STEP         = '-'
             for x in range(start_x, stop_x + 1):
                 for y in range(start_y, stop_y + 1):
                     rectangle[x][y] = self.REASON_DRAWING
-        
+
         if self.debug:
-            print("Post Drawnings:")
+            print("Post Drawings:")
             self.PrintRect(rectangle)
-        
+
         print ("Remove vias to guarantee step size...")
         clear_distance = 0
         if self.step != 0.0:
             clear_distance = int((self.step+l_clearance) / l_clearance)       # How much "via steps" should be removed around a via (round up)
-        
+
         for x in xrange(len(rectangle)):
             for y in xrange(len(rectangle[0])):
                 if isinstance(rectangle[x][y], ViaObject):
                     if clear_distance:
                         self.ClearViaInStepSize(rectangle, x, y, clear_distance)
-                    
+
                     via     = rectangle[x][y]
                     ran_x   = 0
                     ran_y   = 0
-                    
+
                     if self.random:
                         ran_x = (random.random() * l_clearance / 2.0) - (l_clearance / 4.0)
                         ran_y = (random.random() * l_clearance / 2.0) - (l_clearance / 4.0)
-                    
+
                     self.AddVia(wxPoint(via.PosX + ran_x, via.PosY + ran_y), via.X, via.Y)
-        
+
         if self.debug:
             print("\nFinal result:")
             self.PrintRect(rectangle)
@@ -511,9 +530,45 @@ STEP         = '-'
             self.pcb.Save(self.filename)
         print ("Done!")
 
-if __name__ == '__main__':
-    if len(sys.argv) < 2:
-        print("Usage: %s <KiCad pcb filename>" % sys.argv[0])
+def main(argv):
+    help_msg = "python " + sys.argv[0] + "<FILENAME.kicad_pcb> <OPTIONS>\n\nOptions:\n\t-h print this help message\n\t-n or --netname=<NETNAME>\n\t-s or --step=<STEP_MM>\n\t-a or --size=<VIASIZE_MM>\n\t-d or --drill=<DRILL_MM>\n\t-c or --clearance<CLEARANCE_MM>\n\t-e or --erase"
+    netname = "0"
+    stepMM = 1.27
+    sizeMM = 0.6
+    drillMM = 0.3
+    clearanceMM = 0.2
+    filename = sys.argv[1]
+    erase = False
+    if filename in ["-h", "--help"]:
+        print(help_msg)
+        sys.exit(2)
+    try:
+        opts, args = getopt.getopt(sys.argv[2:],"hn:s:a:d:ce",["netname=", "step=", "size=", "drill=", "clearance=", "erase"])
+    except getopt.GetoptError:
+        print(help_msg)
+        sys.exit(2)
+    for opt, arg in opts:
+        if opt == '-h':
+            print(help_msg)
+            sys.exit(0)
+        elif opt in ("--netname", "-n"):
+            netname = str(arg)
+        elif opt in ("--step", "-s"):
+            stepMM = float(arg)
+        elif opt in ("--size", "-a"):
+            size = float(arg)
+        elif opt in ("--drill", "-d"):
+            drillMM = float(arg)
+        elif opt in ("--clearance", "-c"):
+            clearanceMM = float(arg)
+        elif opt in ("--erase", "-e"):
+            erase = True
+    if erase:
+        # As soon as you have the erase flag it will just remove all vias
+        FillArea(filename).SetNetname(netname).DeleteVias().Run()
     else:
-        import sys
-        FillArea(sys.argv[1]).SetDebug().Run()
+        FillArea(filename).SetDebug().SetNetname(netname).SetStepMM(stepMM).SetSizeMM(sizeMM).SetDrillMM(drillMM).SetClearanceMM(clearanceMM).Run()
+    sys.exit(0)
+
+if __name__ == '__main__':
+    main(sys.argv[0:])
