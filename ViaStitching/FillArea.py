@@ -235,7 +235,7 @@ STEP         = '-'
         m.SetViaType(VIA_THROUGH)
         m.SetDrill(int(self.drill))
         m.SetWidth(int(self.size))
-        m.SetTimeStamp(33)  # USE 33 as timestamp to mark this via as generated
+        #m.SetTimeStamp(33)  # USE 33 as timestamp to mark this via as generated
         self.pcb.Add(m)
 
     def RefillBoardAreas(self):
@@ -266,7 +266,7 @@ STEP         = '-'
                         point_to_test   = wxPoint(via.PosX + dx, via.PosY + dy)
 
                         hit_test_area   = area.HitTestFilledArea(point_to_test)             # Collides with a filled area
-                        hit_test_edge   = area.HitTestForEdge(point_to_test)                # Collides with an edge/corner
+                        hit_test_edge   = area.HitTestForEdge(point_to_test, 1)                # Collides with an edge/corner
                         hit_test_zone   = area.HitTestInsideZone(point_to_test)             # Is inside a zone (e.g. KeepOut)
 
                         if is_keepout_area and (hit_test_area or hit_test_edge or hit_test_zone):
@@ -349,12 +349,12 @@ STEP         = '-'
         x_limit     = int((lboard.GetWidth() + l_clearance) / l_clearance) + 1
         y_limit     = int((lboard.GetHeight() + l_clearance) / l_clearance) + 1
 
-        rectangle = [[self.REASON_NO_SIGNAL]*y_limit for i in xrange(x_limit)]
+        rectangle = [[self.REASON_NO_SIGNAL]*y_limit for i in range(x_limit)]
 
         all_pads        = self.pcb.GetPads()
         all_tracks      = self.pcb.GetTracks()
         all_drawings    = filter(lambda x: x.GetClass() == 'PTEXT' and self.pcb.GetLayerID(x.GetLayerName()) in (F_Cu, B_Cu), self.pcb.DrawingsList())
-        all_areas       = [self.pcb.GetArea(i) for i in xrange(self.pcb.GetAreaCount())]
+        all_areas       = [self.pcb.GetArea(i) for i in range(self.pcb.GetAreaCount())]
         target_areas    = filter(lambda x: (x.GetNetname().upper() == self.netname), all_areas)         # KeepOuts are filtered because they have no name
 
         via_list = []       # Create a list of existing vias => faster than scanning through the whole rectangle
@@ -370,8 +370,8 @@ STEP         = '-'
                 max_target_area_clearance = area_clearance
 
             if (not self.only_selected_area) or (self.only_selected_area and is_selected_area):         # All areas or only the selected area
-                for x in xrange(len(rectangle)):                                                        # Check every possible point in the virtual coordinate system
-                    for y in xrange(len(rectangle[0])):
+                for x in range(len(rectangle)):                                                        # Check every possible point in the virtual coordinate system
+                    for y in range(len(rectangle[0])):
                         if rectangle[x][y] == self.REASON_NO_SIGNAL:                                    # No other "target area" found yet => go on with processing
                             current_x = origin.x + (x * l_clearance)                                    # Center of the via
                             current_y = origin.y + (y * l_clearance)
@@ -384,15 +384,21 @@ STEP         = '-'
                                     point_to_test   = wxPoint(current_x + dx, current_y + dy)
                                     # hit_test_area is only true if copper pour zones are filled
                                     hit_test_area   = area.HitTestFilledArea(point_to_test)             # Collides with a filled area
-                                    hit_test_edge   = area.HitTestForEdge(point_to_test)                # Collides with an edge/corner
+                                    hit_test_edge   = area.HitTestForEdge(point_to_test, 1)                # Collides with an edge/corner
 
-                                    #test_result &= hit_test_area and not hit_test_edge                  # test_result only remains true if the via is inside an area and not on an edge
-                                    test_result = hit_test_edge
+                                    #print("Area", hit_test_area, "Edge", hit_test_edge)
 
+                                    test_result &= hit_test_area and not hit_test_edge                  # test_result only remains true if the via is inside an area and not on an edge
+                                    #test_result = hit_test_area
+
+                            #print(test_result)
                             if self.ViaIsInsideAllowedArea(current_x, current_y) and test_result:
+                            #if True:
                                 via_obj = ViaObject(x=x, y=y, pos_x=current_x, pos_y=current_y)         # Create a via object with information about the via and place it in the rectangle
                                 rectangle[x][y] = via_obj
                                 via_list.append(via_obj)
+        print(len(via_list))
+
 
         if self.debug:
             print("\nPost target areas:")
@@ -504,8 +510,8 @@ STEP         = '-'
         if self.step != 0.0:
             clear_distance = int((self.step+l_clearance) / l_clearance)       # How much "via steps" should be removed around a via (round up)
 
-        for x in xrange(len(rectangle)):
-            for y in xrange(len(rectangle[0])):
+        for x in range(len(rectangle)):
+            for y in range(len(rectangle[0])):
                 if isinstance(rectangle[x][y], ViaObject):
                     if clear_distance:
                         self.ClearViaInStepSize(rectangle, x, y, clear_distance)
@@ -518,6 +524,7 @@ STEP         = '-'
                         ran_x = (random.random() * l_clearance / 2.0) - (l_clearance / 4.0)
                         ran_y = (random.random() * l_clearance / 2.0) - (l_clearance / 4.0)
 
+                    print("Here!")
                     self.AddVia(wxPoint(via.PosX + ran_x, via.PosY + ran_y), via.X, via.Y)
 
         if self.debug:
